@@ -150,12 +150,22 @@ fn handle_connection(
     stream
         .set_nonblocking(false)
         .expect("Failed to make accepted HTTP socket blocking");
-    let Some(request) = parse_http_request(stream) else {
-        return;
-    };
-    let (status, body) = handler(&request);
-    captured.lock().unwrap().push(request);
-    write_http_response(stream, status, &body);
+    if let Some(request) = parse_http_request(stream) {
+        let (status, body) = handler(&request);
+        captured.lock().unwrap().push(request);
+        write_http_response(stream, status, &body);
+    }
+    close_gracefully(stream);
+}
+
+/// Half-close and drain the socket before dropping it. Windows resets the
+/// connection (WSAECONNRESET) when a socket is closed with unread input,
+/// which makes clients fail while still reading the response.
+fn close_gracefully(stream: &mut TcpStream) {
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+    let mut sink = [0u8; 1024];
+    while matches!(stream.read(&mut sink), Ok(n) if n > 0) {}
 }
 
 fn parse_http_request(stream: &mut TcpStream) -> Option<CapturedRequest> {
