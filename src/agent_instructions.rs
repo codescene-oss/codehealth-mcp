@@ -20,6 +20,7 @@ const CODEHEALTH_MCP_MARKERS: &[&str] = &[
     "cs-mcp",
     "code_health_review",
     "pre_commit_code_health_safeguard",
+    "analyze_change_set",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -221,6 +222,18 @@ mod tests {
         fs::write(
             repository.path().join("AGENTS.md"),
             crate::setup_hint::SUGGESTED_INSTRUCTIONS,
+        )
+        .unwrap();
+
+        assert!(detect(Some(repository.path())).codehealth_mcp_instructions_present);
+    }
+
+    #[test]
+    fn detects_analyze_change_set_guidance() {
+        let repository = repository();
+        fs::write(
+            repository.path().join("AGENTS.md"),
+            "Run `analyze_change_set` before opening a PR.",
         )
         .unwrap();
 
