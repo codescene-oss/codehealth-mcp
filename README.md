@@ -82,6 +82,75 @@ The CodeHealth MCP is available as a VS Code extension:
 </details>
 
 <details>
+<summary><b>Kiro (IDE / CLI)</b></summary>
+
+Kiro can launch CodeHealth MCP locally over stdio using either npx or an installed binary. No remote MCP URL or Kiro `oauth` configuration is needed.
+
+**Choose a configuration scope:**
+
+- **Workspace:** `.kiro/settings/mcp.json` in your project, for project-specific or shared team configuration.
+- **User:** `~/.kiro/settings/mcp.json`, for all your workspaces.
+
+Both the IDE and CLI use these files. If the same server name appears in both, the workspace entry takes precedence. Merge the `codescene` entry into any existing `mcpServers` object rather than replacing your other servers.
+
+**Option 1 — npx (requires [Node.js](https://nodejs.org/) 18 or later):**
+
+```json
+{
+  "mcpServers": {
+    "codescene": {
+      "command": "npx",
+      "args": ["-y", "@codescene/codehealth-mcp"],
+      "disabled": false
+    }
+  }
+}
+```
+
+The first run downloads and caches the platform-specific binary. The `-y` flag prevents an interactive npm installation prompt.
+
+**Option 2 — installed binary:**
+
+After installing via [Homebrew](docs/homebrew-installation.md), the [Windows installer](docs/windows-installation.md), or [manual download](#installation), use:
+
+```json
+{
+  "mcpServers": {
+    "codescene": {
+      "command": "cs-mcp",
+      "args": [],
+      "disabled": false
+    }
+  }
+}
+```
+
+If Kiro cannot find the executable, set `command` to its absolute path (`cs-mcp.exe` on Windows). Escape Windows backslashes in JSON, for example `C:\\tools\\cs-mcp.exe`.
+
+**CLI alternative:** Instead of editing JSON, register the server from your project directory:
+
+```bash
+kiro-cli mcp add --name codescene --command "npx -y @codescene/codehealth-mcp" --scope workspace
+kiro-cli mcp list
+```
+
+Use `--scope global` for user-level configuration, or `--command cs-mcp` for an installed binary.
+
+**Custom agents:** You can also define the same `mcpServers` object directly in an agent configuration under `.kiro/agents/` or `~/.kiro/agents/`. Agent entries override workspace and user entries with the same server name. Set `"includeMcpJson": true` to inherit servers from the shared MCP configuration files, and include `"@codescene"` in the agent's `tools` list if you restrict tool access. See Kiro's [agent configuration reference](https://kiro.dev/docs/custom-agents/configuration-reference/).
+
+**Connect and authenticate:**
+
+1. In the IDE, open the Command Palette and run **Kiro: Open workspace MCP config (JSON)** or **Kiro: Open user MCP config (JSON)**. Save the configuration, then check the MCP servers tab in the Kiro panel. In CLI chat, use `/mcp` to check the connection.
+2. Ask Kiro to *"Log me in to CodeScene"* so it calls the server's `login` tool and opens the browser sign-in flow. For standalone tokens, PATs, or on-prem instances, see [Authentication](docs/authentication.md).
+3. Verify with a request such as *"Use CodeHealth MCP to review `/absolute/path/to/source-file.rs`."*
+
+For token-based authentication, add `"env": { "CS_ACCESS_TOKEN": "${CS_ACCESS_TOKEN}" }` to the server entry and make the variable available to Kiro. In the IDE, approve its expansion when prompted or add it to **Mcp Approved Env Vars**. Never commit credentials. Leave `CS_ACCESS_TOKEN` unset when using OAuth login.
+
+Tool calls remain subject to Kiro's permissions; review tools before adding any to `autoApprove`. For configuration details and troubleshooting, see the [Kiro MCP documentation](https://kiro.dev/docs/mcp/configuration/) and our [Configuration Options](docs/configuration-options.md).
+
+</details>
+
+<details>
 <summary><b>Homebrew (macOS / Linux)</b></summary>
 
 ```bash
