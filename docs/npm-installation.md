@@ -84,19 +84,21 @@ args = ["@codescene/codehealth-mcp"]
 
 ### Kiro
 
-Create a `.kiro/settings/mcp.json` file:
+Create a `.kiro/settings/mcp.json` file in your project, or use `~/.kiro/settings/mcp.json` for user-level configuration. Both Kiro IDE and CLI use these files:
 
 ```json
 {
   "mcpServers": {
     "codescene": {
       "command": "npx",
-      "args": ["@codescene/codehealth-mcp"],
+      "args": ["-y", "@codescene/codehealth-mcp"],
       "disabled": false
     }
   }
 }
 ```
+
+See [Kiro setup in the README](../README.md#installation) for CLI registration, native binaries, custom agents, authentication, and verification.
 
 ### Claude Desktop
 
