@@ -18,6 +18,8 @@ const CODEHEALTH_MCP_MARKERS: &[&str] = &[
     "codehealth mcp",
     "codehealth-mcp",
     "cs-mcp",
+    "code_health_review",
+    "pre_commit_code_health_safeguard",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -211,6 +213,18 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn detects_suggested_setup_hint_instructions() {
+        let repository = repository();
+        fs::write(
+            repository.path().join("AGENTS.md"),
+            crate::setup_hint::SUGGESTED_INSTRUCTIONS,
+        )
+        .unwrap();
+
+        assert!(detect(Some(repository.path())).codehealth_mcp_instructions_present);
     }
 
     #[test]
