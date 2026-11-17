@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "codescene-code-health",
+  "version": "1.5.22",
+  "description": "Use CodeScene Code Health analysis to safeguard AI-generated code, prioritize technical debt, and guide maintainable refactoring.",
+  "author": {
+    "name": "CodeScene",
+    "url": "https://codescene.com"
+  },
+  "homepage": "https://github.com/codescene-oss/codehealth-mcp",
+  "repository": "https://github.com/codescene-oss/codehealth-mcp",
+  "keywords": [
+    "codescene",
+    "code health",
+    "technical debt",
+    "hotspots",
+    "refactoring",
+    "maintainability",
+    "quality gate",
+    "mcp"
+  ]
+}
