@@ -105,6 +105,7 @@ jobs:
           for path in [
             Path("manifest.json"),
             Path("claude-code-plugin/.claude-plugin/plugin.json"),
+            Path("kiro-power/plugin.json"),
           ]:
             if path.exists():
               data = json.loads(path.read_text())
@@ -113,12 +114,15 @@ jobs:
               print(f"Updated {path} to {version}")
           PY
 
-      - name: Sync skills to Claude Code plugin
+      - name: Sync skills to Claude Code plugin and Kiro power
         run: |
           set -euo pipefail
           rm -rf claude-code-plugin/skills
           cp -r skills claude-code-plugin/skills
           echo "Synced skills/ to claude-code-plugin/skills/"
+          rm -rf kiro-power/skills
+          cp -r skills kiro-power/skills
+          echo "Synced skills/ to kiro-power/skills/"
 
       - name: Update skills table in README
         run: |
@@ -166,7 +170,8 @@ jobs:
 
           git add Formula/cs-mcp.rb manifest.json \
             claude-code-plugin/.claude-plugin/plugin.json \
-            claude-code-plugin/skills claude-code-plugin/README.md
+            claude-code-plugin/skills claude-code-plugin/README.md \
+            kiro-power/plugin.json kiro-power/skills
           git commit -m "chore: update packaging metadata to ${VERSION}"
 
           # Guard against a concurrent push landing between checkout and push.

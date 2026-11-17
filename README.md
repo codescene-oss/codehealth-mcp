@@ -84,7 +84,9 @@ The CodeHealth MCP is available as a VS Code extension:
 <details>
 <summary><b>Kiro (IDE / CLI)</b></summary>
 
-Kiro can launch CodeHealth MCP locally over stdio using either npx or an installed binary. No remote MCP URL or Kiro `oauth` configuration is needed.
+**Recommended — install the Kiro power:** The [CodeScene Code Health power](kiro-power/) bundles the MCP server and the [public skills](skills/), and Kiro manages the server for you. In the IDE, open the Powers panel, choose **Add Custom Power** → **Import power from GitHub**, and enter `https://github.com/codescene-oss/codehealth-mcp/tree/main/kiro-power`. To install from a local clone instead, choose **Import power from a folder** and select the `kiro-power` directory. Node.js 18 or later is required. Then ask Kiro to *"Log me in to CodeScene"*.
+
+**Manual MCP configuration:** Kiro can also launch CodeHealth MCP locally over stdio using either npx or an installed binary. No remote MCP URL or Kiro `oauth` configuration is needed.
 
 **Choose a configuration scope:**
 
