@@ -21,6 +21,7 @@ const CODEHEALTH_MCP_MARKERS: &[&str] = &[
     "code_health_review",
     "pre_commit_code_health_safeguard",
     "analyze_change_set",
+    "code_health_score",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -234,6 +235,18 @@ mod tests {
         fs::write(
             repository.path().join("AGENTS.md"),
             "Run `analyze_change_set` before opening a PR.",
+        )
+        .unwrap();
+
+        assert!(detect(Some(repository.path())).codehealth_mcp_instructions_present);
+    }
+
+    #[test]
+    fn detects_code_health_score_guidance() {
+        let repository = repository();
+        fs::write(
+            repository.path().join("AGENTS.md"),
+            "Use `code_health_score` to rank risk.",
         )
         .unwrap();
 
