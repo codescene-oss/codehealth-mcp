@@ -78,6 +78,10 @@ fn parse_api_response(resp: HttpResponse) -> Result<Value, ApiError> {
     })
 }
 
+/// Hard upper bound on pages fetched by one paginated query, so a buggy or
+/// malicious server cannot keep the client fetching forever.
+const MAX_PAGES: i64 = 1000;
+
 #[cfg(test)]
 pub async fn query_api_list_with_client(
     endpoint: &str,
@@ -94,7 +98,7 @@ pub async fn query_api_list_with_auth(
     let mut results = Vec::new();
     let mut page = 1;
 
-    loop {
+    while page <= MAX_PAGES {
         let sep = if endpoint.contains('?') { '&' } else { '?' };
         let paged = format!("{endpoint}{sep}page={page}");
         let data = query_api_with_auth(&paged, client, credential).await?;
@@ -104,12 +108,13 @@ pub async fn query_api_list_with_auth(
             None => return Ok(collect_with_single(results, data)),
         };
         if items.is_empty() {
-            break;
+            return Ok(results);
         }
         results.extend(items.iter().cloned());
         page += 1;
     }
 
+    warn_page_cap_reached(endpoint);
     Ok(results)
 }
 
@@ -143,7 +148,8 @@ pub async fn query_api_keyed_list_with_auth(
     let mut all_items = Vec::new();
     let mut current_page: i64 = 1;
 
-    loop {
+    // Count requests ourselves: the server-reported `page`/`max_pages` are untrusted.
+    for _ in 0..MAX_PAGES {
         let mut query_params = request.params.to_vec();
         upsert_query_param(&mut query_params, "page", &current_page.to_string());
 
@@ -156,24 +162,34 @@ pub async fn query_api_keyed_list_with_auth(
             .cloned()
             .unwrap_or_default();
         if items.is_empty() {
-            break;
+            return Ok(all_items);
         }
         all_items.extend(items);
 
-        let max_pages = data.get("max_pages").and_then(|v| v.as_i64()).unwrap_or(0);
-        let page = data
-            .get("page")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(current_page);
-
-        if max_pages == 0 || page >= max_pages {
-            break;
+        match next_keyed_page(&data, current_page) {
+            Some(next) => current_page = next,
+            None => return Ok(all_items),
         }
-
-        current_page = page + 1;
     }
 
+    warn_page_cap_reached(request.endpoint);
     Ok(all_items)
+}
+
+/// The page to request after `data`, or `None` when the server reports no more pages.
+fn next_keyed_page(data: &Value, current_page: i64) -> Option<i64> {
+    let max_pages = data.get("max_pages").and_then(Value::as_i64).unwrap_or(0);
+    let page = data
+        .get("page")
+        .and_then(Value::as_i64)
+        .unwrap_or(current_page);
+    (max_pages != 0 && page < max_pages).then(|| page + 1)
+}
+
+fn warn_page_cap_reached(endpoint: &str) {
+    tracing::warn!(
+        "Stopped paginating {endpoint} after the {MAX_PAGES}-page limit; results may be incomplete"
+    );
 }
 
 #[cfg(test)]
@@ -525,6 +541,46 @@ mod tests {
         .unwrap();
         assert_eq!(items.len(), 2);
         cleanup_api_env();
+    }
+
+    #[tokio::test]
+    async fn query_api_keyed_list_stops_at_page_cap_despite_huge_max_pages() {
+        let _g = lock_api_env("tok");
+        let page = format!(
+            r#"{{"result":[{{"id":1}}],"page":1,"max_pages":{}}}"#,
+            i64::MAX
+        );
+        let mock = MockHttpClient::new(vec![HttpResponse::ok(&page); MAX_PAGES as usize + 5]);
+        let captured = mock.captured_requests.clone();
+        let items = query_api_keyed_list_with_client("v2/items", &[], "result", &mock)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), MAX_PAGES as usize);
+        assert_eq!(captured.lock().unwrap().len(), MAX_PAGES as usize);
+        cleanup_api_env();
+    }
+
+    #[tokio::test]
+    async fn query_api_list_stops_at_page_cap_when_pages_never_end() {
+        let _g = lock_api_env("tok");
+        let mock = MockHttpClient::new(vec![
+            HttpResponse::ok(r#"[{"id":1}]"#);
+            MAX_PAGES as usize + 5
+        ]);
+        let captured = mock.captured_requests.clone();
+        let items = query_api_list_with_client("v2/items", &mock).await.unwrap();
+        assert_eq!(items.len(), MAX_PAGES as usize);
+        assert_eq!(captured.lock().unwrap().len(), MAX_PAGES as usize);
+        cleanup_api_env();
+    }
+
+    #[test]
+    fn next_keyed_page_follows_server_paging() {
+        let next = |body: &str| next_keyed_page(&serde_json::from_str(body).unwrap(), 1);
+        assert_eq!(next(r#"{"page":1,"max_pages":3}"#), Some(2));
+        assert_eq!(next(r#"{"page":3,"max_pages":3}"#), None);
+        assert_eq!(next(r#"{"page":1}"#), None);
+        assert_eq!(next(r#"{"max_pages":2}"#), Some(2));
     }
 
     #[test]
