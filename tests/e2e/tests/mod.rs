@@ -46,6 +46,7 @@ pub mod discovery_fallback;
 pub mod docker_path_translation;
 pub mod enabled_tools;
 pub mod error_logging;
+pub mod file_logging_startup;
 pub mod git_subtree;
 pub mod git_worktree;
 pub mod literal_paths;
