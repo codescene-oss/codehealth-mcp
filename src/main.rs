@@ -65,6 +65,7 @@ pub(crate) use tool_filters::API_ONLY_TOOLS;
 pub(crate) use tool_filters::remove_docker_unsupported_tools;
 
 use std::sync::Arc;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -562,7 +563,9 @@ async fn run(args: Vec<String>) -> anyhow::Result<()> {
     let config_data = config::load().unwrap_or_default();
     config::apply_to_env(&config_data);
 
-    let _file_guard = logging::init_tracing(&config_data);
+    let (subscriber, _file_guard) =
+        logging::build_subscriber(&config::log_dir(), config::log_retention_days(&config_data));
+    subscriber.init();
 
     startup::print_startup_logo();
     tracing::info!("CodeHealth MCP server started");
@@ -633,4 +636,3 @@ pub(crate) fn handle_serve_error(err: ServerInitializeError) -> anyhow::Result<(
     tracing::error!("serving error: {err:?}");
     Err(err.into())
 }
-
