@@ -1,47 +1,57 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-use crate::config;
-
-/// Initialise tracing with stderr output and optional file logging.
+/// Build a tracing subscriber with stderr output and optional file logging.
 ///
 /// Returns the non-blocking file-appender guard when file logging is
 /// active.  The guard must be held for the lifetime of the program so
 /// that buffered log entries are flushed on shutdown.
-pub(crate) fn init_tracing(
-    config_data: &config::ConfigData,
-) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+pub(crate) fn build_subscriber(
+    log_dir: &Path,
+    retention_days: u32,
+) -> (
+    impl tracing::Subscriber + Send + Sync,
+    Option<tracing_appender::non_blocking::WorkerGuard>,
+) {
     let env_filter = EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into());
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(false);
 
-    let retention_days = config::log_retention_days(config_data);
-    if let Some(log_dir) = prepare_log_dir(&config::log_dir(), retention_days) {
-        let file_appender = tracing_appender::rolling::daily(&log_dir, "mcp.log");
-        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_writer(non_blocking)
-            .with_ansi(false);
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(stderr_layer)
-            .with(file_layer)
-            .init();
-        return Some(guard);
-    }
+    let (file_layer, guard) = prepare_log_dir(log_dir, retention_days)
+        .and_then(open_file_appender)
+        .map(|appender| {
+            let (writer, guard) = tracing_appender::non_blocking(appender);
+            let layer = tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false);
+            (layer, guard)
+        })
+        .unzip();
 
-    // Stderr-only: file logging disabled or log directory not writable
-    // (e.g. non-root container with a read-only config path).
-    tracing_subscriber::registry()
+    let subscriber = tracing_subscriber::registry()
         .with(env_filter)
         .with(stderr_layer)
-        .init();
-    None
+        .with(file_layer);
+    (subscriber, guard)
+}
+
+fn open_file_appender(log_dir: PathBuf) -> Option<RollingFileAppender> {
+    match RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("mcp.log")
+        .build(&log_dir)
+    {
+        Ok(appender) => Some(appender),
+        Err(error) => {
+            eprintln!("File logging unavailable in {log_dir:?}; logging to stderr only: {error}");
+            None
+        }
+    }
 }
 
 /// Create the log directory and prune old logs when file logging is enabled.
@@ -135,5 +145,31 @@ mod tests {
         std::fs::write(&blocker, "").unwrap();
 
         assert_eq!(prepare_log_dir(&blocker.join("logs"), 7), None);
+    }
+
+    #[test]
+    fn subscriber_writes_to_file_when_logging_is_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let (subscriber, guard) = build_subscriber(dir.path(), 7);
+        let guard = guard.expect("file logging should be active");
+        tracing::subscriber::with_default(subscriber, || tracing::info!("test log entry"));
+        drop(guard);
+
+        let log = std::fs::read_dir(dir.path()).unwrap().next().unwrap();
+        let content = std::fs::read_to_string(log.unwrap().path()).unwrap();
+        assert!(content.contains("test log entry"), "{content}");
+    }
+
+    #[test]
+    fn subscriber_still_builds_when_daily_log_file_cannot_be_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let today = time::OffsetDateTime::now_utc().date();
+        let tomorrow = today.next_day().unwrap();
+        for date in [today, tomorrow] {
+            std::fs::create_dir(dir.path().join(format!("mcp.log.{date}"))).unwrap();
+        }
+
+        let (_subscriber, guard) = build_subscriber(dir.path(), 7);
+        assert!(guard.is_none(), "file logging should be inactive");
     }
 }

@@ -391,6 +391,11 @@ e2e_tests!(error_logging {
     test_unsupported_file_type_detail_in_telemetry,
 });
 
+// --- File Logging Startup ---
+e2e_tests!(file_logging_startup {
+    test_startup_with_unavailable_log_file,
+});
+
 // --- Skill Resources ---
 e2e_tests!(skill_resources {
     test_skill_init_capabilities => test_init_capabilities,
