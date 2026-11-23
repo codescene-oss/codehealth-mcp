@@ -5,6 +5,7 @@
 //! PAT. Legacy mappings without account metadata must remain usable.
 //!
 //! Switching must happen before a file tool runs, even with tracking disabled.
+//! Also checks recovery when the cached OAuth account and CLI pin disagree.
 //! The fake CLI models stored credential slots and interactive login; no browser
 //! or live CodeScene credentials are required. Docker skips these host binaries.
 
@@ -113,15 +114,19 @@ impl AccountSwitchEnv {
     }
 
     fn score(&self, client: &mut MCPClient) {
-        let response = client
+        let response = self.call_score(client);
+        let text = extract_result_text(&response);
+        assert_eq!(extract_code_health_score(&text), Some(9.5), "{text}");
+    }
+
+    fn call_score(&self, client: &mut MCPClient) -> serde_json::Value {
+        client
             .call_tool(
                 SCORE_TOOL,
                 json!({"file_path": self.repo_dir.join("src/utils/calculator.py").to_string_lossy()}),
                 TIMEOUT,
             )
-            .expect("score tool should respond");
-        let text = extract_result_text(&response);
-        assert_eq!(extract_code_health_score(&text), Some(9.5), "{text}");
+            .expect("score tool should respond")
     }
 
     fn cli_calls(&self) -> Vec<(String, String)> {
@@ -471,4 +476,97 @@ pub fn test_automatic_account_switching_blocks_tool_after_failed_switch() {
 #[test]
 pub fn test_automatic_account_switching_keeps_session_for_invalid_mapping() {
     assert_no_switch(json!({"repositories": "invalid"}), false);
+}
+
+fn drift_fixture(expires_at: &str, stored_account: &str) -> AccountSwitchEnv {
+    let mut fixture = AccountSwitchEnv::new(json!({"repositories": []}));
+    // No remote means repository-based routing cannot mask the mismatch.
+    assert!(Command::new("git")
+        .args(["remote", "remove", "origin"])
+        .current_dir(&fixture.repo_dir)
+        .status()
+        .expect("remove remote")
+        .success());
+    seed_config(
+        &fixture.config_dir,
+        json!({
+            "instance_id": "oauth-account-drift-e2e",
+            "account_id": "11",
+            "oauth_account_id": "3834",
+            "oauth_token": "cached-session",
+            "oauth_expires_at": expires_at,
+        }),
+    );
+    fixture.set_env("FAKE_AUTH_STORED_ACCOUNT", stored_account.to_string());
+    let account = stored_account.parse().expect("fixture account ID");
+    fixture.set_env(
+        "FAKE_AUTH_TOKEN_RESPONSE",
+        signed_in_json_with_account(TARGET_TOKEN, 3600, account),
+    );
+    fixture
+}
+
+pub fn test_oauth_account_drift_recovers_without_login() {
+    if is_docker() {
+        return skip_if_docker("fake CLI binary not available in container");
+    }
+    for expiry in ["4102444800", "1"] {
+        let fixture = drift_fixture(expiry, "3834");
+        fixture.score(&mut fixture.start());
+        fixture.assert_session("3834", TARGET_TOKEN);
+        let before = fixture.cli_calls();
+        assert!(before
+            .iter()
+            .all(|(command, _)| !command.starts_with("auth login ")));
+
+        fixture.score(&mut fixture.start());
+        assert!(fixture.cli_calls()[before.len()..]
+            .iter()
+            .all(|(command, _)| !command.starts_with("auth ")));
+    }
+}
+
+pub fn test_oauth_account_drift_keeps_a_working_pin() {
+    if is_docker() {
+        return skip_if_docker("fake CLI binary not available in container");
+    }
+    let fixture = drift_fixture("4102444800", "11");
+    fixture.score(&mut fixture.start());
+    fixture.assert_session("11", TARGET_TOKEN);
+}
+
+pub fn test_oauth_account_drift_reports_missing_slots() {
+    if is_docker() {
+        return skip_if_docker("fake CLI binary not available in container");
+    }
+    let fixture = drift_fixture("4102444800", "42");
+    let response = fixture.call_score(&mut fixture.start());
+    let text = extract_result_text(&response);
+    assert_eq!(response["result"]["isError"], true, "{text}");
+    for term in ["11", "3834", "switch_account"] {
+        assert!(text.contains(term), "Missing {term}: {text}");
+    }
+    assert!(!text.contains("Personal Access Token"), "{text}");
+    assert_eq!(read_config(&fixture.config_dir)["account_id"], "11");
+    assert!(fixture
+        .cli_calls()
+        .iter()
+        .all(|(command, _)| command.starts_with("auth token ")));
+}
+
+pub fn test_oauth_account_drift_respects_client_pin() {
+    if is_docker() {
+        return skip_if_docker("fake CLI binary not available in container");
+    }
+    let mut fixture = drift_fixture("4102444800", "3834");
+    fixture.set_env("CS_ACCOUNT_ID", "11".to_string());
+    let response = fixture.call_score(&mut fixture.start());
+    let text = extract_result_text(&response);
+    assert_eq!(response["result"]["isError"], true, "{text}");
+    assert!(text.contains("Update or remove CS_ACCOUNT_ID"), "{text}");
+    assert_eq!(read_config(&fixture.config_dir)["account_id"], "11");
+    assert!(fixture
+        .cli_calls()
+        .iter()
+        .all(|(command, slot)| command.starts_with("auth token ") && slot == "11"));
 }

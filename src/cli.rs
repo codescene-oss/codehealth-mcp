@@ -8,20 +8,8 @@ use sha2::{Digest, Sha256};
 use crate::environment;
 use crate::errors::CliError;
 
-/// Trait abstracting CLI subprocess execution for dependency injection.
-#[async_trait::async_trait]
-pub trait CliRunner: Send + Sync {
-    async fn run(&self, args: &[&str], working_dir: Option<&Path>) -> Result<String, CliError>;
-}
-
-pub struct ProductionCliRunner;
-
-#[async_trait::async_trait]
-impl CliRunner for ProductionCliRunner {
-    async fn run(&self, args: &[&str], working_dir: Option<&Path>) -> Result<String, CliError> {
-        run_cli(args, working_dir).await
-    }
-}
+mod runner;
+pub use runner::{CliRunner, ProductionCliRunner};
 
 const CLI_ZIP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cs-cli.zip"));
 
@@ -62,32 +50,38 @@ fn resolve_from_docker() -> Option<Result<PathBuf, CliError>> {
     p.exists().then_some(Ok(p))
 }
 
-pub async fn run_cli(args: &[&str], working_dir: Option<&Path>) -> Result<String, CliError> {
+async fn run_cli(
+    args: &[&str],
+    working_dir: Option<&Path>,
+    account_id: Option<i64>,
+) -> Result<String, CliError> {
     let cli_path = resolve_cli_path()?;
     tracing::info!(path = %cli_path.display(), args = ?args, "using CodeScene CLI");
-    run_cli_at_path(&cli_path, args, working_dir).await
+    run_cli_at_path(&cli_path, args, working_dir, account_id).await
 }
 
 async fn run_cli_at_path(
     cli_path: &Path,
     args: &[&str],
     working_dir: Option<&Path>,
+    account_id: Option<i64>,
 ) -> Result<String, CliError> {
-    let output = run_cli_process(cli_path, args, working_dir, false).await?;
+    let mut cmd = prepare_cli_command(cli_path, args, working_dir, account_id);
+    let output = cmd.output().await?;
     if output.status.success() {
         return Ok(decode_cli_bytes(&output.stdout));
     }
 
     let stderr = decode_cli_bytes(&output.stderr);
     if should_retry_after_telemetry_flush_error(&stderr) {
-        let retry_output = run_cli_process(cli_path, args, working_dir, true).await?;
+        let retry_output = cmd.env("CS_DISABLE_TRACKING", "1").output().await?;
         return parse_cli_output(retry_output);
     }
 
     if is_license_check_failure(&stderr) {
         tracing::warn!("License check failed, retrying after brief delay...");
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let retry_output = run_cli_process(cli_path, args, working_dir, false).await?;
+        let retry_output = cmd.output().await?;
         if retry_output.status.success() {
             return Ok(decode_cli_bytes(&retry_output.stdout));
         }
@@ -97,12 +91,12 @@ async fn run_cli_at_path(
     parse_cli_output(output)
 }
 
-async fn run_cli_process(
+fn prepare_cli_command(
     cli_path: &Path,
     args: &[&str],
     working_dir: Option<&Path>,
-    disable_tracking: bool,
-) -> Result<Output, CliError> {
+    account_id: Option<i64>,
+) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(cli_path);
     let effective_args = with_ssl_cli_args_if_needed(cli_path, args);
 
@@ -110,15 +104,15 @@ async fn run_cli_process(
         .env("CS_CONTEXT", "mcp-server")
         .env("CS_DISABLE_VERSION_CHECK", "1");
 
-    if disable_tracking {
-        cmd.env("CS_DISABLE_TRACKING", "1");
-    }
-
     remove_sensitive_env_vars(&mut cmd);
     apply_optional_cli_env(&mut cmd, "CS_ACCESS_TOKEN", true);
     apply_optional_cli_env(&mut cmd, "CS_ONPREM_URL", false);
     apply_optional_cli_env(&mut cmd, "CS_OAUTH_CLIENT", true);
-    apply_optional_cli_env(&mut cmd, "CS_ACCOUNT_ID", true);
+    if let Some(id) = account_id {
+        cmd.env("CS_ACCOUNT_ID", id.to_string());
+    } else {
+        apply_optional_cli_env(&mut cmd, "CS_ACCOUNT_ID", true);
+    }
 
     if let Some(dir) = working_dir {
         cmd.current_dir(dir);
@@ -132,7 +126,7 @@ async fn run_cli_process(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    cmd.output().await.map_err(CliError::from)
+    cmd
 }
 
 /// Decode CLI stdout/stderr. Prefer UTF-8; Windows CLIs often emit the ANSI
@@ -576,6 +570,13 @@ pub fn find_git_root(path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    async fn run_cli_at_path(
+        cli_path: &std::path::Path,
+        args: &[&str],
+        working_dir: Option<&std::path::Path>,
+    ) -> Result<String, crate::errors::CliError> {
+        super::run_cli_at_path(cli_path, args, working_dir, None).await
+    }
     use super::*;
     use crate::config;
     #[cfg(unix)]
