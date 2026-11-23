@@ -3,6 +3,9 @@ use crate::config::{is_client_env_var, ConfigEnvWriteGuard};
 
 use super::{fetch_token_for_account, state, CliTokenResponse};
 
+#[cfg(test)]
+mod tests;
+
 pub(super) struct AccountDrift {
     pin: i64,
     cached: i64,
