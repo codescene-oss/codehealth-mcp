@@ -1,6 +1,6 @@
 use rmcp::model::{CallToolResult, ContentBlock as Content};
 
-use crate::auth::AuthCredential;
+use crate::auth::{AuthCredential, CredentialResolutionError};
 use crate::{analytics_attribution, environment, tools, CodeSceneServer, ContextualErrorEvent};
 
 const TOKEN_MISSING_MSG: &str = "\
@@ -86,7 +86,10 @@ impl CodeSceneServer {
                     token_missing_msg(),
                 )]))
             }
-            Err(e) => {
+            Err(CredentialResolutionError::AccountDrift(message)) => {
+                Err(tools::common::tool_error(message))
+            }
+            Err(CredentialResolutionError::Cli(e)) => {
                 tracing::warn!(error = %e, "auth token check failed");
                 Err(CallToolResult::success(vec![Content::text(
                     token_missing_msg(),

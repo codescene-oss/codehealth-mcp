@@ -61,7 +61,8 @@ impl CodeSceneServer {
         }
         self.auth_manager
             .resolve_credential(&*self.cli_runner)
-            .await?
+            .await
+            .map_err(|error| error.to_string())?
             .ok_or_else(|| {
                 format!("No OAuth credential available after switching to account {target}")
             })

@@ -1,9 +1,17 @@
 use crate::cli::CliRunner;
 
 use super::{
-    configured_credential, credential_from_response, fetch_token, run_login, run_logout, state,
-    AuthCredential, CliTokenResponse,
+    account_drift, configured_credential, credential_from_response, fetch_token, run_login,
+    run_logout, state, AuthCredential, CliTokenResponse,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CredentialResolutionError {
+    #[error("{0}")]
+    Cli(String),
+    #[error("{0}")]
+    AccountDrift(String),
+}
 
 /// Outcome of [`AuthManager::switch_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,7 +65,7 @@ impl AuthManager {
     pub(crate) async fn resolve_credential(
         &self,
         cli_runner: &dyn CliRunner,
-    ) -> Result<Option<AuthCredential>, String> {
+    ) -> Result<Option<AuthCredential>, CredentialResolutionError> {
         // PAT takes priority.
         if let Some(credential) = configured_credential() {
             tracing::info!(
@@ -67,7 +75,7 @@ impl AuthManager {
             return Ok(Some(credential));
         }
         // Check persisted OAuth token.
-        if let Some(cred) = state::fresh_credential() {
+        if let Some(cred) = state::fresh_credential_for_resolution() {
             let has_onprem_url = cred.api_root().ok().is_some();
             tracing::info!(
                 source = "oauth_cache",
@@ -95,7 +103,7 @@ impl AuthManager {
     pub(crate) async fn current_token(
         &self,
         cli_runner: &dyn CliRunner,
-    ) -> Result<Option<CliTokenResponse>, String> {
+    ) -> Result<Option<CliTokenResponse>, CredentialResolutionError> {
         // Check if we have a fresh token in env.
         if state::has_fresh_token() {
             // Build a synthetic CliTokenResponse from env for compatibility.
@@ -172,7 +180,7 @@ impl AuthManager {
     async fn refresh_token(
         &self,
         cli_runner: &dyn CliRunner,
-    ) -> Result<Option<AuthCredential>, String> {
+    ) -> Result<Option<AuthCredential>, CredentialResolutionError> {
         let resp = self.refresh_token_raw(cli_runner).await?;
         let credential = resp.and_then(|r| credential_from_response(&r));
         let resolved = credential.is_some();
@@ -185,8 +193,16 @@ impl AuthManager {
     async fn refresh_token_raw(
         &self,
         cli_runner: &dyn CliRunner,
-    ) -> Result<Option<CliTokenResponse>, String> {
+    ) -> Result<Option<CliTokenResponse>, CredentialResolutionError> {
         let guard = crate::config::acquire_write_lock().await;
+
+        if let Some(drift) = account_drift::detect(&guard) {
+            return drift
+                .recover(cli_runner, &guard)
+                .await
+                .map(Some)
+                .map_err(CredentialResolutionError::AccountDrift);
+        }
 
         // Double-check under write lock: another thread may have refreshed.
         if state::guard_has_fresh_token(&guard) {
@@ -209,7 +225,9 @@ impl AuthManager {
         }
 
         tracing::info!("running CLI auth token refresh");
-        let token = fetch_token(cli_runner).await?;
+        let token = fetch_token(cli_runner)
+            .await
+            .map_err(CredentialResolutionError::Cli)?;
         match token {
             Some(resp) if resp.is_signed_in() => {
                 state::persist_response(&guard, &resp);

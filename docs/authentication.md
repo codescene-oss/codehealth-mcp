@@ -81,6 +81,12 @@ Switching does **not** log you out of other accounts’ stored CLI sessions. Aft
 - **First login (optional pin):** You may set `account_id` **before** `login` if you want the initial browser flow pinned to a specific account. Keep it set afterward so refresh uses the matching credential slot.
 - **Already signed in:** Prefer `switch_account` with the target account name, slug, or ID. You do not need to logout first.
 
+#### Recovering from a Cloud account mismatch
+
+If the cached OAuth session belongs to a different Cloud account than the CLI pin, the MCP first checks for a usable session for the pinned account. If that account isn't signed in but the CLI has a stored session for the cached account, the MCP updates its saved pin and continues without opening a browser or requiring a PAT.
+
+If neither session is usable, use `switch_account` to authorize the intended account. If the MCP client explicitly sets `CS_ACCOUNT_ID`, update or remove it in the client configuration and restart the MCP server instead; automatic recovery does not override that setting.
+
 #### Legacy sessions (no `account_id` pin)
 
 If you signed in earlier without setting `account_id`, the session still works via the browser-selected Cloud account. The server may backfill session account metadata from the CLI when available. Use `switch_account` when you intentionally want to pin or change accounts. The first time you pin an account that previously only existed in the browser-selected slot, you may be asked to sign in once so credentials are stored for that numbered slot.

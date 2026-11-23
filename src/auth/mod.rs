@@ -1,3 +1,4 @@
+mod account_drift;
 mod accounts;
 mod manager;
 mod state;
@@ -6,7 +7,9 @@ pub(crate) use accounts::{
     accounts_list_json, list_accounts_payload, resolve_named_account, AccountNameMatch,
     CloudAccount,
 };
-pub(crate) use manager::{AuthManager, SwitchAccountResult, SwitchAccountStatus};
+pub(crate) use manager::{
+    AuthManager, CredentialResolutionError, SwitchAccountResult, SwitchAccountStatus,
+};
 
 use serde::Deserialize;
 
@@ -256,11 +259,48 @@ async fn run_and_parse_auth(
     command: &str,
 ) -> Result<CliTokenResponse, String> {
     let output = run_auth_command(cli_runner, command).await?;
+    parse_auth_response(command, &output)
+}
+
+fn parse_auth_response(command: &str, output: &str) -> Result<CliTokenResponse, String> {
     serde_json::from_str(output.trim()).map_err(|e| {
-        let output_preview = sanitized_output_preview(&output);
+        let output_preview = sanitized_output_preview(output);
         tracing::warn!(command, error = %e, output_preview, "failed to parse auth response");
         format!("Failed to parse {command} response from CLI")
     })
+}
+
+fn auth_args(command: &str) -> [&str; 6] {
+    [
+        "auth",
+        command,
+        "--client",
+        MCP_OAUTH_CLIENT,
+        "--output-format",
+        "json",
+    ]
+}
+
+async fn fetch_token_for_account(
+    cli_runner: &dyn CliRunner,
+    account_id: i64,
+) -> Result<Option<CliTokenResponse>, String> {
+    use crate::errors::CliError;
+
+    match cli_runner
+        .run_for_account(&auth_args("token"), account_id)
+        .await
+    {
+        Ok(output) => {
+            let response = parse_auth_response("token", &output)?;
+            Ok(response.is_signed_in().then_some(response))
+        }
+        // The bundled CLI can report a missing slot as a nonzero exit, not JSON.
+        Err(CliError::NonZeroExit { stderr, .. }) if stderr.contains(r#"{:status "signed_out"}"#) => {
+            Ok(None)
+        }
+        Err(error) => Err(format_auth_error("token", error)),
+    }
 }
 
 pub(super) async fn run_auth_command(
@@ -268,38 +308,30 @@ pub(super) async fn run_auth_command(
     command: &str,
 ) -> Result<String, String> {
     cli_runner
-        .run(
-            &[
-                "auth",
-                command,
-                "--client",
-                MCP_OAUTH_CLIENT,
-                "--output-format",
-                "json",
-            ],
-            None,
-        )
+        .run(&auth_args(command), None)
         .await
-        .map_err(|e| {
-            tracing::warn!(error = %e, command, error_kind = e.kind(), "auth command failed");
-            match &e {
-                crate::errors::CliError::NotFound(_) => {
-                    "CodeScene CLI not found. Ensure it is installed.".to_string()
-                }
-                crate::errors::CliError::Io(_) => {
-                    format!("Failed to run auth {command}: I/O error")
-                }
-                crate::errors::CliError::NonZeroExit { stderr, .. } => {
-                    let detail = stderr.trim();
-                    if detail.is_empty() {
-                        format!("Auth {command} failed (CLI exited with an error)")
-                    } else {
-                        format!("Auth {command} failed: {detail}")
-                    }
-                }
-                _ => format!("Auth {command} failed (CLI exited with an error)"),
+        .map_err(|e| format_auth_error(command, e))
+}
+
+fn format_auth_error(command: &str, e: crate::errors::CliError) -> String {
+    tracing::warn!(error = %e, command, error_kind = e.kind(), "auth command failed");
+    match &e {
+        crate::errors::CliError::NotFound(_) => {
+            "CodeScene CLI not found. Ensure it is installed.".to_string()
+        }
+        crate::errors::CliError::Io(_) => {
+            format!("Failed to run auth {command}: I/O error")
+        }
+        crate::errors::CliError::NonZeroExit { stderr, .. } => {
+            let detail = stderr.trim();
+            if detail.is_empty() {
+                format!("Auth {command} failed (CLI exited with an error)")
+            } else {
+                format!("Auth {command} failed: {detail}")
             }
-        })
+        }
+        _ => format!("Auth {command} failed (CLI exited with an error)"),
+    }
 }
 
 /// Build an `AuthCredential::OAuth` from a CLI token response.

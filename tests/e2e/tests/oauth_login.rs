@@ -102,6 +102,12 @@ fn main() {
 
     match (args.first().map(|s| s.as_str()), args.get(1).map(|s| s.as_str())) {
         (Some("auth"), Some("token")) => {
+            if let Ok(account) = env::var("FAKE_AUTH_STORED_ACCOUNT") {
+                if env::var("CS_ACCOUNT_ID").as_deref() != Ok(account.as_str()) {
+                    eprintln!(r#"OAuth not signed in. Run `cs auth login`., {{:status "signed_out"}}"#);
+                    process::exit(1);
+                }
+            }
             let marker = env::var("FAKE_CALL_MARKER").ok();
             let already_called = marker
                 .as_deref()
@@ -144,6 +150,12 @@ fn main() {
             process::exit(0);
         }
         (Some("review"), _) => {
+            if let Ok(account) = env::var("FAKE_AUTH_STORED_ACCOUNT") {
+                if env::var("CS_ACCOUNT_ID").as_deref() != Ok(account.as_str()) {
+                    eprintln!("No Personal Access Token configured.");
+                    process::exit(1);
+                }
+            }
             println!(r#"{{"score":9.5,"review":[]}}"#);
             process::exit(0);
         }

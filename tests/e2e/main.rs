@@ -133,6 +133,14 @@ macro_rules! e2e_tests {
 // Tests
 // ============================================================================
 
+// --- OAuth Account Drift ---
+e2e_tests!(automatic_account_switching {
+    test_oauth_account_drift_recovers_without_login,
+    test_oauth_account_drift_keeps_a_working_pin,
+    test_oauth_account_drift_reports_missing_slots,
+    test_oauth_account_drift_respects_client_pin,
+});
+
 // --- Core Tools ---
 e2e_tests!(core_tools {
     test_server_startup,

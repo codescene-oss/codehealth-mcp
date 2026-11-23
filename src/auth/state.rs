@@ -7,11 +7,25 @@ const TOKEN_EXPIRY_MARGIN_SECS: i64 = 60;
 const SIGNED_OUT_SENTINEL: &str = "0";
 
 pub(super) fn fresh_credential() -> Option<AuthCredential> {
+    read_fresh_credential(false)
+}
+
+pub(super) fn fresh_credential_for_resolution() -> Option<AuthCredential> {
+    read_fresh_credential(true)
+}
+
+fn read_fresh_credential(check_account: bool) -> Option<AuthCredential> {
     let vals = crate::config::try_read_env_multi(&[
         "CS_OAUTH_TOKEN",
         "CS_OAUTH_EXPIRES_AT",
         "CS_ONPREM_URL",
+        "CS_ACCOUNT_ID",
+        "CS_OAUTH_ACCOUNT_ID",
     ])?;
+    let mismatch = mismatched_accounts(vals[2].as_deref(), vals[3].as_deref(), vals[4].as_deref());
+    if check_account && mismatch.is_some() {
+        return None;
+    }
     let token = vals[0].as_deref()?.trim().to_string();
     if token.is_empty() {
         let oauth_expires_at = vals[1].clone();
@@ -37,6 +51,19 @@ pub(super) fn fresh_credential() -> Option<AuthCredential> {
         access_token: token,
         onprem_url,
     })
+}
+
+pub(super) fn mismatched_accounts(
+    onprem: Option<&str>,
+    pin: Option<&str>,
+    cached: Option<&str>,
+) -> Option<(i64, i64)> {
+    if onprem.is_some() {
+        return None;
+    }
+    let pin: i64 = pin?.trim().parse().ok()?;
+    let cached: i64 = cached?.trim().parse().ok()?;
+    (pin > 0 && cached > 0 && pin != cached).then_some((pin, cached))
 }
 
 pub(super) fn has_fresh_token() -> bool {
@@ -139,6 +166,16 @@ pub(super) fn persist_response(
     guard: &crate::config::ConfigEnvWriteGuard,
     response: &CliTokenResponse,
 ) {
+    if let Err(e) = persist_session(guard, response, None) {
+        tracing::warn!(error = %e, "failed to persist OAuth state to config file");
+    }
+}
+
+pub(super) fn persist_session(
+    guard: &crate::config::ConfigEnvWriteGuard,
+    response: &CliTokenResponse,
+    new_pin: Option<i64>,
+) -> Result<(), crate::errors::ConfigError> {
     let token = response.access_token.as_deref().unwrap_or("").trim();
     let expires_at = response
         .expires_at
@@ -153,15 +190,17 @@ pub(super) fn persist_response(
         .filter(|&id| id > 0)
         .map(|id| id.to_string())
         .unwrap_or_default();
-    let entries: &[(&str, &str)] = &[
+    let mut entries = vec![
         ("oauth_token", token),
         ("oauth_expires_at", &expires_at),
         ("oauth_refresh_expires_at", &refresh_expires_at),
         ("oauth_account_id", &account_id),
     ];
-    if let Err(e) = guard.write_env_multi(entries) {
-        tracing::warn!(error = %e, "failed to persist OAuth state to config file");
+    let pin = new_pin.map(|id| id.to_string());
+    if let Some(pin) = &pin {
+        entries.push(("account_id", pin));
     }
+    guard.write_env_multi(&entries)?;
     let has_access_token = !token.is_empty();
     tracing::info!(
         has_access_token,
@@ -170,6 +209,7 @@ pub(super) fn persist_response(
         oauth_account_id = %account_id,
         "persisted OAuth state to config-backed environment"
     );
+    Ok(())
 }
 
 /// Clear MCP OAuth cache without setting the signed-out sentinel.
